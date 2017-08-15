@@ -166,8 +166,8 @@ public final class StreamAllocation {
       if (canceled) throw new IOException("Canceled");
 
       // Attempt to use an already-allocated connection.
-      RealConnection allocatedConnection = this.connection;
-      if (allocatedConnection != null && !allocatedConnection.noNewStreams) {
+      RealConnection allocatedConnection = previousAllocatedConnection();
+      if (allocatedConnection != null) {
         return allocatedConnection;
       }
 
@@ -255,6 +255,29 @@ public final class StreamAllocation {
     closeQuietly(socket);
 
     return result;
+  }
+
+  /**
+   * Returns the previous allocated connection or null if there is no previous allocated connection.
+   * We will have a previous allocated connection in the case of follow-up requests. With HTTP/2
+   * multiple requests share the same connection so it's possible that our connection is flagged to
+   * disallow new streams during a follow-up request.
+   */
+  private RealConnection previousAllocatedConnection() {
+    assert (Thread.holdsLock(connectionPool));
+
+    RealConnection allocatedConnection = this.connection;
+    if (allocatedConnection == null) return null;
+
+    if (allocatedConnection.noNewStreams) {
+      // Our connection was flagged to disallow new streams. This could happen in HTTP/2 when
+      // multiple requests use the same connection. Discard it.
+      deallocate(false, true, true);
+      return null;
+    }
+
+    // We're good!
+    return allocatedConnection;
   }
 
   public void streamFinished(boolean noNewStreams, HttpCodec codec) {
